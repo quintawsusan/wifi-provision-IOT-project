@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
-#include "secrets.h"
+#include <secrets.h>
 
 const int ledPin = 2;
 WebServer server(80);
@@ -16,9 +16,12 @@ String page()
            "<style>"
            "body {"
            "    color: white;"
+           "    background: #0d1117;"
+           "    font-family: monospace;"
            "}"
            ".esp{"
-           "    color: #131a22;"
+           "    background: #131a22;"
+           "    color: white;"
            "    font-size: 20px;"
            "    border: 1px solid #1f6b2c;"
            "    padding: 40px;"
@@ -35,11 +38,20 @@ String page()
            "    border-radius: 4px;"
            "    padding: 14px;"
            "    background: #131a22;"
-           "    height: 150px;"
+           "    min-height: 150px;"
            "padding-left: 30px;"
            "}"
            ".networks{"
            "padding-left: 90px;"
+           "}"
+           "#netList{"
+           "    font-size: 14px;"
+           "    margin: 12px 0;"
+           "    min-height: 60px;"
+           "}"
+           ".net-row{"
+           "    padding: 5px 0;"
+           "    border-bottom: 1px solid #2a3542;"
            "}"
            "button {"
            "    width: 30%;"
@@ -49,6 +61,7 @@ String page()
            "    border: 1px solid #1f6b2c;"
            "    color: #39d353;"
            "    border-radius: 5px;"
+           "    cursor: pointer;"
            "}"
            "button:hover {"
            "    background: rgba(57, 211, 83, 0.1);"
@@ -64,8 +77,8 @@ String page()
            "    padding-top: 10px;"
            "}"
            "</style>"
-
            "</head>"
+
            "<body>"
            "<div class='esp'>"
            "  <h2>ESP Information</h2>"
@@ -74,16 +87,33 @@ String page()
            "  <div class='card'>"
            "<div class='networks'>"
            "    <h3>Nearby Available Networks</h3>"
-           "    <button>Scan Me</button>"
+           "    <div id='netList'>No scan yet.</div>"
+           "    <button onclick='scanNetworks()'>Scan Me</button>"
            "</div>"
            "  </div>"
            "  <div class='card'>"
            "    <h3>LED Controls</h3>"
-           "    <input id='onoff' placeholder='Type on or off'>"
-           "    <button>Send</button>"
+           "<form action='/send'>"
+           "    <input id='onoff' name='led' placeholder='Type on or off'>"
+           "    <button type='submit'>Send</button>"
+           "</form>"
            "    <div id='state'>Current state: %status%</div>"
            "  </div>"
            "</div>"
+
+           "<script>"
+           "function scanNetworks(){"
+           "  document.getElementById('netList').innerText = 'Scanning...';"
+           "  fetch('/scan').then(r => r.json()).then(data => {"
+           "    let html = '';"
+           "    data.forEach(n => {"
+           "      html += \"<div class='net-row'>\" + n.ssid + ' &mdash; ' + n.rssi + ' dBm ' + (n.secure ? '&#128274;' : '') + '</div>';"
+           "    });"
+           "    document.getElementById('netList').innerHTML = html || 'No networks found.';"
+           "  });"
+           "}"
+           "</script>"
+
            "</body>"
            "</html>";
 }
@@ -92,15 +122,50 @@ void handleRoot()
 {
     String html = page();
 
-    html.replace("%networks%", "Click Scan Networks");
-
     if (digitalRead(ledPin))
         html.replace("%status%", "ON");
     else
         html.replace("%status%", "OFF");
 
+
     server.send(200, "text/html", html);
 }
+
+void handleScan()
+{
+    int n = WiFi.scanNetworks();
+
+    int indices[n];
+    for (int i = 0; i < n; i++) indices[i] = i;
+
+    for (int i = 0; i < n - 1; i++)
+    {
+        for (int j = 0; j < n - i - 1; j++)
+        {
+            if (WiFi.RSSI(indices[j]) < WiFi.RSSI(indices[j + 1]))
+            {
+                int temp = indices[j];
+                indices[j] = indices[j + 1];
+                indices[j + 1] = temp;
+            }
+        }
+    }
+
+    String json = "[";
+    for (int i = 0; i < n; i++)
+    {
+        int idx = indices[i];
+        json += "{\"ssid\":\"" + WiFi.SSID(idx) + "\",";
+        json += "\"rssi\":" + String(WiFi.RSSI(idx)) + ",";
+        json += "\"secure\":" + String(WiFi.encryptionType(idx) != WIFI_AUTH_OPEN ? "true" : "false") + "}";
+        if (i < n - 1) json += ",";
+    }
+    json += "]";
+
+    WiFi.scanDelete(); 
+    server.send(200, "application/json", json);
+}
+
 
 void handleOn()
 {
@@ -119,12 +184,13 @@ void handleOff()
 void handleSend()
 {
     String value = server.arg("led");
-
     if (value == "on")
         digitalWrite(ledPin, HIGH);
 
+
     if (value == "off")
         digitalWrite(ledPin, LOW);
+
 
     server.sendHeader("Location", "/");
     server.send(303);
@@ -144,6 +210,7 @@ void setup()
     Serial.println("Connected to WiFi");
     Serial.println(WiFi.localIP());
     server.on("/", handleRoot);
+    server.on("/scan", handleScan);
     server.on("/on", handleOn);
     server.on("/off", handleOff);
     server.on("/send", handleSend);
@@ -154,3 +221,4 @@ void loop()
 {
     server.handleClient();
 }
+
